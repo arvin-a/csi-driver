@@ -30,7 +30,7 @@ envsubst <  ./tenant-csi-deploy-kustomize/base/060-infra-cluster-driver-config-t
 envsubst <  ./tenant-csi-deploy-kustomize/base/070-storageclass-template.yaml > ./tenant-csi-deploy-kustomize/base/070-storageclass.yaml
 
 
-kubectl --kubeconfig $TENANT_CLUSTER_KUBEECONFIG kustomize ./tenant-csi-deploy-kustomize/base | oc apply -f - 
+kubectl --kubeconfig $TENANT_CLUSTER_KUBEECONFIG kustomize ./tenant-csi-deploy-kustomize/base | oc --kubeconfig $TENANT_CLUSTER_KUBEECONFIG apply -f - 
 
 ## cleanup
 rm -f ./tenant-csi-deploy-kustomize/base/050-infra-cluster-credentials.yaml
