@@ -14,11 +14,34 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	kubevirtv1 "kubevirt.io/api/core/v1"
 	cdiv1 "kubevirt.io/containerized-data-importer-api/pkg/apis/core/v1beta1"
+	"kubevirt.io/csi-driver/pkg/util"
 )
+
+func TestCreateVolumeDefaultStorageClass_Success(t *testing.T) {
+
+	origStorageClass := testInfraStorageClassName
+	testInfraStorageClassName = ""
+	storageClassEnforcement = util.StorageClassEnforcement{
+		AllowAll: true,
+		AllowDefault: true,
+	}
+	defer func() { testInfraStorageClassName = origStorageClass }()
+
+	client := &ControllerClientMock{t: t}
+	controller := ControllerService{client, testInfraNamespace, testInfraLabels, storageClassEnforcement}
+
+	response, err := controller.CreateVolume(context.TODO(), getCreateVolumeRequest())
+	assert.Nil(t, err)
+
+	assert.Equal(t, testVolumeName, response.GetVolume().GetVolumeId())
+	assert.Equal(t, testDataVolumeUID, response.GetVolume().VolumeContext[serialParameter])
+	assert.Equal(t, string(getBusType()), response.GetVolume().VolumeContext[busParameter])
+	assert.Equal(t, testVolumeStorageSize, response.GetVolume().GetCapacityBytes())
+}
 
 func TestCreateVolume_Success(t *testing.T) {
 	client := &ControllerClientMock{t: t}
-	controller := ControllerService{client, testInfraNamespace, testInfraLabels}
+	controller := ControllerService{client, testInfraNamespace, testInfraLabels, storageClassEnforcement}
 
 	response, err := controller.CreateVolume(context.TODO(), getCreateVolumeRequest())
 	assert.Nil(t, err)
@@ -31,7 +54,7 @@ func TestCreateVolume_Success(t *testing.T) {
 
 func TestCreateVolume_CreateDataVolumeFail(t *testing.T) {
 	client := &ControllerClientMock{t: t, FailCreateDataVolume: true}
-	controller := ControllerService{client, testInfraNamespace, testInfraLabels}
+	controller := ControllerService{client, testInfraNamespace, testInfraLabels, storageClassEnforcement}
 
 	_, err := controller.CreateVolume(context.TODO(), getCreateVolumeRequest())
 	assert.NotNil(t, err)
@@ -39,7 +62,7 @@ func TestCreateVolume_CreateDataVolumeFail(t *testing.T) {
 
 func TestCreateVolume_CustomBus(t *testing.T) {
 	client := &ControllerClientMock{t: t}
-	controller := ControllerService{client, testInfraNamespace, testInfraLabels}
+	controller := ControllerService{client, testInfraNamespace, testInfraLabels, storageClassEnforcement}
 
 	busTypeLocal := kubevirtv1.DiskBusVirtio
 	testBusType = &busTypeLocal
@@ -50,9 +73,27 @@ func TestCreateVolume_CustomBus(t *testing.T) {
 	assert.Equal(t, response.GetVolume().GetVolumeContext()[busParameter], string(*testBusType))
 }
 
+func TestCreateVolume_NotAllowedStorageClass(t *testing.T) {
+	client := &ControllerClientMock{t: t}
+	allowedStorageClasses = []string{"allowedClass"}
+	allowAllStorageClasses = false
+	storageClassEnforcement = util.StorageClassEnforcement{
+		AllowList: []string{"allowedClass"},
+		AllowAll: false,
+		AllowDefault: true,
+	}
+	controller := ControllerService{client, testInfraNamespace, testInfraLabels, storageClassEnforcement}
+
+	request := getCreateVolumeRequest()
+	request.Parameters[infraStorageClassNameParameter] = "notAllowedClass"
+
+	_, err := controller.CreateVolume(context.TODO(), request)
+	assert.Equal(t, unallowedStorageClass, err)
+}
+
 func TestDeleteVolume_Success(t *testing.T) {
 	client := &ControllerClientMock{t: t}
-	controller := ControllerService{client, testInfraNamespace, testInfraLabels}
+	controller := ControllerService{client, testInfraNamespace, testInfraLabels, storageClassEnforcement}
 
 	_, err := controller.DeleteVolume(context.TODO(), getDeleteVolumeRequest())
 	assert.Nil(t, err)
@@ -60,7 +101,7 @@ func TestDeleteVolume_Success(t *testing.T) {
 
 func TestDeleteVolume_Fail(t *testing.T) {
 	client := &ControllerClientMock{t: t, FailDeleteDataVolume: true}
-	controller := ControllerService{client, testInfraNamespace, testInfraLabels}
+	controller := ControllerService{client, testInfraNamespace, testInfraLabels, storageClassEnforcement}
 
 	_, err := controller.DeleteVolume(context.TODO(), getDeleteVolumeRequest())
 	assert.NotNil(t, err)
@@ -68,7 +109,7 @@ func TestDeleteVolume_Fail(t *testing.T) {
 
 func TestPublishVolume_Success(t *testing.T) {
 	client := &ControllerClientMock{t: t}
-	controller := ControllerService{client, testInfraNamespace, testInfraLabels}
+	controller := ControllerService{client, testInfraNamespace, testInfraLabels, storageClassEnforcement}
 
 	_, err := controller.ControllerPublishVolume(context.TODO(), getPublishVolumeRequest()) // AddVolumeToVM tests the hotplug request
 	assert.Nil(t, err)
@@ -76,7 +117,7 @@ func TestPublishVolume_Success(t *testing.T) {
 
 func TestUnpublishVolume_Success(t *testing.T) {
 	client := &ControllerClientMock{t: t}
-	controller := ControllerService{client, testInfraNamespace, testInfraLabels}
+	controller := ControllerService{client, testInfraNamespace, testInfraLabels, storageClassEnforcement}
 
 	_, err := controller.ControllerUnpublishVolume(context.TODO(), getUnpublishVolumeRequest())
 	assert.Nil(t, err)
@@ -98,6 +139,12 @@ var (
 	testVolumeMode                                = corev1.PersistentVolumeFilesystem
 	testBusType               *kubevirtv1.DiskBus = nil // nil==do not pass bus type
 	testInfraLabels                               = map[string]string{"infra-label-name": "infra-label-value"}
+	allowedStorageClasses                         = []string{}
+	allowAllStorageClasses                        = true
+	storageClassEnforcement = util.StorageClassEnforcement{
+		AllowAll: true,
+		AllowDefault: true,
+	}
 )
 
 func getBusType() kubevirtv1.DiskBus {
@@ -123,7 +170,9 @@ func getCreateVolumeRequest() *csi.CreateVolumeRequest {
 	}
 
 	parameters := map[string]string{}
-	parameters[infraStorageClassNameParameter] = testInfraStorageClassName
+	if testInfraStorageClassName != "" {
+		parameters[infraStorageClassNameParameter] = testInfraStorageClassName
+	}
 	if testBusType != nil {
 		parameters[busParameter] = string(*testBusType)
 	}
@@ -222,7 +271,11 @@ func (c *ControllerClientMock) CreateDataVolume(namespace string, dataVolume *cd
 
 	// Test input
 	assert.Equal(c.t, testVolumeName, dataVolume.GetName())
-	assert.Equal(c.t, testInfraStorageClassName, *dataVolume.Spec.PVC.StorageClassName)
+	if testInfraStorageClassName != "" {
+		assert.Equal(c.t, testInfraStorageClassName, *dataVolume.Spec.PVC.StorageClassName)
+	} else {
+		assert.Nil(c.t, dataVolume.Spec.PVC.StorageClassName)
+	}
 	q, ok := dataVolume.Spec.PVC.Resources.Requests[corev1.ResourceStorage]
 	assert.True(c.t, ok)
 	assert.Equal(c.t, 0, q.CmpInt64(testVolumeStorageSize))
